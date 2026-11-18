@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Speech Time Tracker</title>
+<style>
+:root{color-scheme:light dark;font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+body{max-width:660px;margin:36px auto;padding:0 18px;background:Canvas;color:CanvasText}
+h1{font-size:1.65rem}.muted{opacity:.7}
+.panel{padding:20px;border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:18px;margin:15px 0}
+.center{text-align:center}.timer{font-size:clamp(52px,13vw,82px);font-weight:750;letter-spacing:-3px;font-variant-numeric:tabular-nums}
+.row{display:flex;justify-content:space-between;gap:12px;align-items:center;margin:12px 0}
+button{border:0;border-radius:12px;padding:12px 17px;font-size:1rem;font-weight:650;cursor:pointer}.controls button{flex:1;min-width:180px}
+button:disabled{opacity:.5;cursor:not-allowed}
+#start{background:#2563eb;color:white}
+#start.monitoring-started{background:transparent;color:CanvasText;border:1px solid #888}
+#reset{background:transparent;border:1px solid #888;color:CanvasText}
+#reset.has-accent{background:#2563eb;color:white;border:1px solid #2563eb}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#888;margin-right:8px}.dot.on{background:#16a34a;box-shadow:0 0 0 4px #16a34a22}
+.track{height:9px;border-radius:20px;background:#8885;overflow:hidden}.track div{height:100%;width:0;background:#2563eb;transition:width .08s}
+#message{padding:12px;border-radius:10px;background:#8882;line-height:1.5;overflow-wrap:anywhere}
+input[type=range]{width:100%;accent-color:#2563eb}
+.metric{font-size:1.7rem;font-weight:700}
+#detection{min-height:100px;padding:20px 18px!important;border-width:2px!important;transition:background .12s,border-color .12s}
+#detection.above{background:#16a34a!important;border-color:#15803d!important;color:white}
+#detection.above .dot{width:18px;height:18px;flex:0 0 18px;background:white;box-shadow:0 0 0 5px #ffffff35}
+#detection.above .muted{color:#effff2;opacity:1}
+#detection.below{background:#8882!important;border-color:#8888!important;color:CanvasText}
+#detection.below .dot{width:18px;height:18px;flex:0 0 18px;background:#888}
+#detection-title{font-size:1.15rem}
+#detection-detail{font-size:.95rem!important}
+
+button:focus-visible,input:focus-visible{outline:3px solid #60a5fa;outline-offset:3px}
+</style>
+</head>
+<body>
+<h1>Speech Time Tracker</h1>
+<p class="muted">Counts detected speaking time. Silence pauses the timer; speaking again resumes it.</p>
+<div class="row controls" style="flex-wrap:wrap">
+  <button id="start">▶ Start monitoring</button>
+  <button id="reset">↻ Reset timer</button>
+</div>
+
+
+<div class="panel center">
+  <div><span id="dot" class="dot"></span><strong id="status">Not started</strong></div>
+  <div class="muted" style="margin-top:18px;font-size:.8rem;letter-spacing:.12em">TOTAL SPEAKING TIME</div>
+  <div id="total" class="timer">00:00.000</div>
+  <div class="row" style="border-top:1px solid #8885;padding-top:14px;margin-top:20px">
+    <span class="muted">Current speaking session</span><strong id="session">00:00</strong>
+  </div>
+</div>
+
+<div class="row"><strong>Voice activity</strong><span id="level" class="muted">Waiting for microphone</span></div>
+<div class="track"><div id="meter"></div></div>
+<div id="detection" class="row" style="justify-content:flex-start;gap:10px;padding:12px 14px;border-radius:12px;background:#8882;border:1px solid #8885" aria-live="polite">
+  <span id="detection-dot" class="dot"></span>
+  <div><strong id="detection-title">No sound above threshold</strong><div id="detection-detail" class="muted" style="font-size:.85rem">Input is below the speech threshold</div></div>
+  <span id="input-value" style="margin-left:auto;font-variant-numeric:tabular-nums;font-weight:800;font-size:1.35rem">0.0%</span>
+</div>
+
+<div class="row">
+  <div class="panel" style="flex:1;margin:10px 0"><div class="muted">Speaking sessions</div><div id="count" class="metric">0</div></div>
+  <div class="panel" style="flex:1;margin:10px 0"><div class="muted">Silence time</div><div id="silence" class="metric">—</div></div>
+</div>
+
+<div class="panel">
+  <div class="row" style="margin-top:0">
+    <strong>Noise filter / speech threshold</strong>
+    <strong id="threshold-label">2.5%</strong>
+  </div>
+  <input id="threshold" type="range" min="0.5" max="50" step="0.5" value="2.5" aria-label="Speech detection threshold">
+  <div class="row muted" style="font-size:.82rem">
+    <span>More sensitive</span><span>Much less sensitive</span>
+  </div>
+  <p class="muted" style="font-size:.9rem;margin-bottom:0">Raise the threshold up to 50% to reject louder background noise. Lower it if your voice is not detected. The live meter shows microphone input level.</p>
+</div>
+
+<div id="message" role="status" aria-live="polite">Click Start monitoring. Your browser will request microphone access the first time. Once granted, pausing and resuming will reuse the existing microphone connection.</div>
+
+<div class="panel">
+  <strong>Microphone status</strong>
+  <div id="mic-status" class="muted" style="margin-top:8px">Not connected</div>
+</div>
+
+<div class="panel">
+  <strong>Screen status</strong>
+  <div id="wake-status" class="muted" style="margin-top:8px">Screen wake lock will be requested when monitoring starts.</div>
+</div>
+
+
+<div class="panel" id="reset-history-panel">
+  <strong>Reset history</strong>
+  <p class="muted" style="margin:8px 0 10px;font-size:.85rem">Recent reset events are kept here even after the timer is cleared.</p>
+  <div id="reset-log" class="muted" style="font-size:.88rem;line-height:1.6">No resets yet.</div>
+</div>
+
+<script>
+(() => {
+ const $=id=>document.getElementById(id);
+ let stream=null,ctx=null,analyser=null,source=null,raf=0,wakeLock=null;
+ let monitoring=false,speaking=false,accumulated=0,segmentStart=0,lastVoice=0,count=0;
+ let threshold=0.025,hasStarted=false,resetLog=[];
+ const silenceDelay=850;
+ const now=()=>performance.now();
+ const fmt=n=>{const s=Math.floor(n/1000);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')};
+
+ function render(){
+   const t=accumulated+(speaking?now()-segmentStart:0);
+   $('total').textContent=fmt(t)+'.'+String(Math.floor(t%1000)).padStart(3,'0');
+   $('session').textContent=fmt(speaking?now()-segmentStart:0);
+   $('count').textContent=count;
+ }
+ function setMicStatus(text){$('mic-status').textContent=text}
+ function setWakeStatus(text){$('wake-status').textContent=text}
+
+ async function requestWakeLock(){
+   if(!monitoring)return;
+   if(!('wakeLock' in navigator)){
+     setWakeStatus('This browser does not support Screen Wake Lock. Keep the phone plugged in and adjust its display timeout manually if needed.');
+     return;
+   }
+   if(document.visibilityState!=='visible'){
+     setWakeStatus('Waiting for the app to become visible before requesting screen wake lock.');
+     return;
+   }
+   try{
+     if(wakeLock && !wakeLock.released)return;
+     wakeLock=await navigator.wakeLock.request('screen');
+     setWakeStatus('Screen is being kept awake while this page is visible and monitoring is active.');
+     wakeLock.addEventListener('release',()=>{
+       wakeLock=null;
+       if(monitoring){
+         setWakeStatus(document.visibilityState==='visible'
+           ?'Screen wake lock was released by the browser. It will try again automatically.'
+           :'Screen wake lock is paused while this page is hidden.');
+       }else{
+         setWakeStatus('Screen wake lock is off because monitoring is paused.');
+       }
+     });
+   }catch(error){
+     wakeLock=null;
+     setWakeStatus('Could not keep the screen awake: '+(error.message||error.name)+'. Check browser and device power settings.');
+   }
+ }
+ async function releaseWakeLock(){
+   if(wakeLock){
+     const lock=wakeLock;
+     wakeLock=null;
+     try{await lock.release()}catch(e){}
+   }
+   setWakeStatus(monitoring
+     ?'Screen wake lock will resume when the page is visible.'
+     :'Screen wake lock is off because monitoring is paused.');
+ }
+ document.addEventListener('visibilitychange',()=>{
+   if(document.visibilityState==='visible' && monitoring){
+     requestWakeLock();
+   }
+ });
+
+ function updateButtons(){
+   $('start').textContent=monitoring?'Ⅱ Pause monitoring':(stream?'▶ Resume monitoring':'▶ Start monitoring');
+   $('start').classList.toggle('monitoring-started',hasStarted);
+   $('reset').classList.toggle('has-accent',hasStarted);
+ }
+ function draw(){
+   if(!monitoring||!analyser)return;
+   const data=new Uint8Array(analyser.fftSize);
+   analyser.getByteTimeDomainData(data);
+   let sum=0;
+   for(const v of data){const x=(v-128)/128;sum+=x*x}
+   const rms=Math.sqrt(sum/data.length),t=now(),active=rms>threshold;
+   if(active){
+     lastVoice=t;
+     if(!speaking){
+       speaking=true;segmentStart=t;count++;
+       $('status').textContent='Speaking';$('dot').classList.add('on');
+     }
+   }else if(speaking&&t-lastVoice>=silenceDelay){
+     accumulated+=t-segmentStart;speaking=false;
+     $('status').textContent='Silence detected';$('dot').classList.remove('on');
+   }
+   const inputPercent=rms*100;
+   $('meter').style.width=Math.min(100,inputPercent*2)+'%';
+   $('input-value').textContent=inputPercent.toFixed(1)+'%';
+   $('detection').classList.toggle('above',active);
+   $('detection').classList.toggle('below',!active);
+   $('detection-title').textContent=active?'Above threshold — detected':'Below threshold — filtered';
+   $('detection-detail').textContent='Input '+inputPercent.toFixed(1)+'% · Threshold '+(threshold*100).toFixed(1)+'%';
+   $('level').textContent=active?'Above threshold':'Below threshold';
+   $('silence').textContent=speaking?'0.0 s':lastVoice?((t-lastVoice)/1000).toFixed(1)+' s':'—';
+   render();
+   raf=requestAnimationFrame(draw);
+ }
+
+ async function connectMicrophone(){
+   if(stream && stream.getAudioTracks().some(track=>track.readyState==='live'))return;
+   if(!window.isSecureContext)throw new Error('Microphone access requires HTTPS or localhost.');
+   if(!navigator.mediaDevices?.getUserMedia)throw new Error('This browser or embedded page does not provide microphone access. Open this HTML file directly in a supported browser.');
+   // Only request a new stream when no live microphone connection exists.
+   stream=await navigator.mediaDevices.getUserMedia({audio:{
+     echoCancellation:true,noiseSuppression:true,autoGainControl:true
+   }});
+   ctx=new(window.AudioContext||window.webkitAudioContext)();
+   await ctx.resume();
+   analyser=ctx.createAnalyser();analyser.fftSize=2048;
+   source=ctx.createMediaStreamSource(stream);source.connect(analyser);
+   stream.getAudioTracks()[0].addEventListener('ended',()=>{
+     if(stream){monitoring=false;stream=null;analyser=null;source=null;setMicStatus('Microphone disconnected by browser or device.');updateButtons()}
+   });
+   setMicStatus('Connected — permission granted. Pause/resume will reuse this connection.');
+   updateButtons();
+ }
+
+ async function start(){
+   if(monitoring){pause();return}
+   $('start').disabled=true;
+   $('message').textContent=stream?'Resuming with the existing microphone connection…':'Connecting to microphone. Allow access if your browser asks.';
+   try{
+     await connectMicrophone();
+     if(ctx.state==='suspended')await ctx.resume();
+     monitoring=true;speaking=false;lastVoice=0;hasStarted=true;
+     $('status').textContent='Listening';$('dot').classList.remove('on');
+     await requestWakeLock();
+     $('message').textContent='Monitoring is active. Pause and resume will not request microphone access again while this connection remains open.';
+     updateButtons();draw();
+   }catch(e){
+     if(e.name==='NotAllowedError'||e.name==='PermissionDeniedError'){
+       $('message').textContent='Microphone permission was denied or blocked. Allow microphone access in your browser site settings, then try again.';
+     }else if(e.name==='NotFoundError'){
+       $('message').textContent='No microphone was found. Connect a microphone and try again.';
+     }else{
+       $('message').textContent=e.message||'Could not start microphone monitoring.';
+     }
+     setMicStatus('Not connected');
+     // Clean up a partially initialized connection.
+     if(ctx){await ctx.close().catch(()=>{});ctx=null}
+     if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
+     analyser=null;source=null;updateButtons();
+   }finally{$('start').disabled=false}
+ }
+
+ function pause(){
+   if(!monitoring)return;
+   if(speaking){accumulated+=now()-segmentStart;speaking=false}
+   monitoring=false;cancelAnimationFrame(raf);
+   releaseWakeLock();
+   $('status').textContent='Paused';$('dot').classList.remove('on');
+   $('level').textContent='Paused';$('meter').style.width='0%';
+   $('message').textContent='Monitoring paused. The microphone connection is being kept open so Resume does not need to ask for permission again.';
+   render();updateButtons();
+ }
+
+
+ $('start').addEventListener('click',start);
+ $('reset').addEventListener('click',()=>{
+   // Capture the values being cleared so the history remains useful.
+   const previousTotal=accumulated+(speaking?now()-segmentStart:0);
+   const previousSessions=count;
+   const timestamp=new Date().toLocaleString();
+   resetLog.unshift({
+     timestamp,
+     previousTotal:Math.max(0,previousTotal),
+     previousSessions,
+     monitoring
+   });
+   resetLog=resetLog.slice(0,20);
+
+   // Clear all timer/session state without disconnecting the microphone
+   // or stopping active monitoring.
+   accumulated=0;
+   count=0;
+   lastVoice=0;
+   speaking=false;
+   segmentStart=0;
+
+   $('status').textContent=monitoring?'Listening':(stream?'Paused':'Not started');
+   $('dot').classList.remove('on');
+   $('silence').textContent='—';
+   $('session').textContent='00:00';
+   $('message').textContent='Timer and session information reset. Microphone connection, monitoring state, and threshold are unchanged.';
+
+   // Render the persistent reset history at the bottom of the page.
+   const log=$('reset-log');
+   log.replaceChildren();
+   resetLog.forEach((item,index)=>{
+     const seconds=Math.floor(item.previousTotal/1000);
+     const formatted=String(Math.floor(seconds/60)).padStart(2,'0')+':'+
+       String(seconds%60).padStart(2,'0')+'.'+
+       String(Math.floor(item.previousTotal%1000)).padStart(3,'0');
+     const row=document.createElement('div');
+     row.style.cssText='padding:8px 0;'+(index?'border-top:1px solid #8884;':'');
+     const strong=document.createElement('strong');
+     strong.textContent=item.timestamp;
+     row.append(strong,document.createTextNode(
+       ' — Cleared '+formatted+' and '+item.previousSessions+
+       ' session(s); monitoring '+(item.monitoring?'was active':'was paused')
+     ));
+     log.appendChild(row);
+   });
+
+   console.info('[Speech Time Tracker] Reset clicked', {
+     timestamp,
+     previousSpeakingTimeMs:Math.round(previousTotal),
+     previousSessions,
+     monitoring
+   });
+   render();
+ });
+ $('threshold').addEventListener('input',e=>{
+   threshold=Number(e.target.value)/100;
+   $('threshold-label').textContent=Number(e.target.value).toFixed(1)+'%';
+ });
+ window.addEventListener('beforeunload',()=>{
+   if(wakeLock)wakeLock.release().catch(()=>{});
+   if(stream)stream.getTracks().forEach(t=>t.stop());
+   if(ctx)ctx.close();
+ });
+ render();updateButtons();
+})();
+</script>
+</body>
+</html>
